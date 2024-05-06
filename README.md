@@ -17,13 +17,17 @@ nRF52840デバイスを経由して他のデバイスにパソコンのキーボ
 次のライブラリをインストールしてください。
 
 ```sh
-pip install pynput
-pip install keyboard
-pip install pyserial
+pip install pynput keyboard pyserial
 ```
 
 nRF52840デバイスが接続されているシリアルポートを指定して起動してください。
 
 ```sh
 python ble_keyboard_link.py COM20
+```
+
+ディスプレイの設定で拡大縮小を設定している場合、引数`display_scale`で指定してください。
+
+```sh
+python ble_keyboard_link.py COM20 --display_scale 1.5
 ```

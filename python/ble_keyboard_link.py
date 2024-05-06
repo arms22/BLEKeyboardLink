@@ -6,20 +6,31 @@ import sys
 import threading
 from collections import defaultdict
 import time
+import argparse
 
-args = sys.argv
-if len(args) < 2:
-    print('python ble_keyboard_link.py COMxx')
-    exit()
+# ArgumentParserオブジェクトの作成
+parser = argparse.ArgumentParser(description='Send PC keyboard and mouse input via nRF52840 device to other devices.')
 
-ser = serial.Serial(port=args[1], baudrate=115200, timeout=1)
+# オプションの定義
+parser.add_argument('--screen_width', type=int, default=1920, help='Width of the screen')
+parser.add_argument('--screen_height', type=int, default=1080, help='Height of the screen')
+parser.add_argument('--display_scale', type=float, default=1, help='Display scale for screen')
+parser.add_argument('port', type=str, help='COM port')
+
+args = parser.parse_args()
+
+ser = serial.Serial(port=args.port, baudrate=115200, timeout=1)
 lock = threading.Lock()
 
 mouse_buttons = 0
-center_x = 1920 / 2
-center_y = 1080 / 2
+display_scale = args.display_scale
+center_x = args.screen_width / 2
+center_y = args.screen_height / 2
 mouse_x = center_x
 mouse_y = center_y
+mouse_skip_n = 1
+mouse_set_req = False
+cond = threading.Condition()
 
 def send_mouse(buttons, dx, dy, wheel):
     event_data = struct.pack('BBbbbBBB', 0x5e, buttons, dx, dy, wheel, 0, 0, 0)
@@ -39,10 +50,22 @@ def update_mouse_xy(x, y):
     return max(min(mx, 127),-128), max(min(my, 127),-128)
 
 def move(x, y):
-    mx, my = update_mouse_xy(x, y)
-    print(x, y, mx, my)
-    if mx or my:
-        send_mouse(mouse_buttons, mx, my, 0)
+    with cond:
+        # positionで指定した表示座標が1回入ってくるので無視する
+        global mouse_skip_n
+        global mouse_set_req
+        if mouse_skip_n:
+            mouse_skip_n -= 1
+            print('set', x, y)
+            return
+        mx, my = update_mouse_xy(x, y)
+        print('move', x, y, mx, my)
+        if mx or my:
+            send_mouse(mouse_buttons, mx, my, 0)
+        # ここでposition設定すると動きがおかしくなるのでメインループでposition設定する
+        if abs(x - center_x) > center_x*0.95 or abs(y - center_y) > center_y*0.95:
+            mouse_set_req = True
+            cond.notify_all()
 
 def click(x, y, button, pressed):
     global mouse_buttons
@@ -58,15 +81,16 @@ def click(x, y, button, pressed):
     else:
         mouse_buttons ^= btn_to_hid_button[button]
     mx, my = update_mouse_xy(x, y)
+    print('click', mouse_buttons, mx, my)
     send_mouse(mouse_buttons, mx, my, 0)
 
 def scroll(x, y, dx, dy):
-    print('wheel', dx, dy)
     mx, my = update_mouse_xy(x, y)
+    print('wheel', dx, dy, mx, my)
     send_mouse(mouse_buttons, mx, my, dy)
 
 mouse_controller = mouse.Controller()
-mouse_controller.position = (center_x, center_y)
+mouse_controller.position = (center_x / display_scale, center_y / display_scale)
 
 mouse_listener = mouse.Listener(
     on_move=move,
@@ -265,10 +289,9 @@ scan_code_to_hid_key_code = defaultdict(int, {
 })
 
 def send_keycode(modifier, keycode):
-    code = [scan_code_to_hid_key_code[c] for c in keycode]
-    code = code + [0] * max(6 - len(keycode),0)
+    code = [scan_code_to_hid_key_code[c] for c in keycode] + [0] * 6
     event_data = struct.pack('BB6B', 0xbd, modifier, *code[:6])
-    print('Send', event_data)
+    # print('Send', event_data)
     with lock:
         ser.write(event_data)
 
@@ -299,8 +322,10 @@ def on_key_event(event):
             modifier |= event_name_to_modifier[event.name]
             keycode.add(event.scan_code)
         elif event.event_type == 'up':
-            modifier ^= event_name_to_modifier[event.name]
-            keycode.remove(event.scan_code)
+            modifier &= ~event_name_to_modifier[event.name]
+            # 複数のキーに同じコードを割り当てていた場合にUPが連続してくる場合がある
+            if event.scan_code in keycode:
+                keycode.remove(event.scan_code)
 
     print(modifier, keycode)
     send_keycode(modifier, keycode)
@@ -314,10 +339,15 @@ keyboard.hook(on_key_event)
 # keyboard.wait('esc')
 # keyboard.wait()
 
-while True:
-    x,y = mouse_controller.position
-    if abs(x - center_x) > center_x*0.75 or abs(y - center_y) > center_y*0.75:
-        mouse_x = center_x
-        mouse_y = center_y
-        mouse_controller.position = (center_x, center_y)
-    time.sleep(0.1)
+try:
+    while True:
+        with cond:
+            cond.wait(timeout=1)
+            if mouse_set_req:
+                mouse_x = center_x
+                mouse_y = center_y
+                mouse_skip_n = 1
+                mouse_set_req = False
+                mouse_controller.position = (center_x / display_scale, center_y / display_scale)
+except:
+    pass
