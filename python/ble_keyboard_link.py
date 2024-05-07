@@ -57,6 +57,8 @@ def move(x, y):
         if mouse_skip_n:
             mouse_skip_n -= 1
             print('set', x, y)
+            if mouse_skip_n == 0:
+                update_mouse_xy(x, y)
             return
         mx, my = update_mouse_xy(x, y)
         print('move', x, y, mx, my)
@@ -346,7 +348,7 @@ try:
             if mouse_set_req:
                 mouse_x = center_x
                 mouse_y = center_y
-                mouse_skip_n = 1
+                mouse_skip_n = 2
                 mouse_set_req = False
                 mouse_controller.position = (center_x / display_scale, center_y / display_scale)
 except:
